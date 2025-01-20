@@ -1,0 +1,91 @@
+name: Analyse & Build
+on: [push, workflow_dispatch]
+
+jobs:
+  package-analysis:
+    name: "Analyse Package"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Run Dart Package Analyser
+        uses: axel-op/dart-package-analyzer@v3
+        id: analysis
+        with:
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check Package Scores
+        env:
+          TOTAL: ${{ steps.analysis.outputs.total }}
+          TOTAL_MAX: ${{ steps.analysis.outputs.total_max }}
+        run: |
+          if (( $TOTAL < $TOTAL_MAX ))
+          then
+            echo Total score below expected minimum score. Improve the score!
+            exit 1
+          fi
+
+  content-analysis:
+    name: "Analyse Contents"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Setup Flutter Environment
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+      - name: Ensure Correct Flutter Installation
+        run: flutter --version
+      - name: Get All Dependencies
+        run: flutter pub get
+      - name: Check Formatting
+        run: dart format --output=none --set-exit-if-changed .
+      - name: Check Lints
+        run: dart analyze --fatal-infos --fatal-warnings
+
+  build-example:
+    name: "Build Example Applications"
+    runs-on: windows-latest
+    needs: [content-analysis, package-analysis]
+    if: github.event.head_commit.message != 'Built Example Applications'
+    defaults:
+      run:
+        working-directory: ./example
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Setup Java 17 Environment
+        uses: actions/setup-java@v3
+        with:
+          distribution: "temurin"
+          java-version: "17"
+      - name: Setup Flutter Environment
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+      - name: Ensure Correct Flutter Installation
+        run: flutter --version
+      - name: Ensure Clean Flutter Environment
+        run: flutter clean
+      - name: Remove Existing Prebuilt Applications
+        run: Remove-Item "prebuiltExampleApplications" -Recurse -ErrorAction Ignore
+        working-directory: .
+      - name: Create Prebuilt Applications (Output) Directory
+        run: md prebuiltExampleApplications
+        working-directory: .
+      - name: Build Android Application
+        run: flutter build apk --split-per-abi --obfuscate --split-debug-info=/symbols
+      - name: Move Android Application To Output Directory
+        run: move "example\build\app\outputs\flutter-apk\app-armeabi-v7a-release.apk" "prebuiltExampleApplications\AndroidApplication.apk"
+        working-directory: .
+      - name: Build Windows Application
+        run: flutter build windows --obfuscate --split-debug-info=/symbols
+      - name: Create Windows Application Installer
+        run: iscc "windowsApplicationInstallerSetup.iss"
+        working-directory: .
+      - name: Commit Output Directory
+        uses: EndBug/add-and-commit@v9.0.1
+        with:
+          message: "Built Example Applications"
+          add: "prebuiltExampleApplications/"
+          default_author: github_actions
